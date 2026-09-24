@@ -55,6 +55,61 @@ One service on its own:
 docker compose logs -f kitchen-service
 ```
 
+## Sending Telemetry to Dash0
+
+All three Node services are instrumented with OpenTelemetry. There is no
+tracing code in the application — `@opentelemetry/auto-instrumentations-node`
+is loaded through `NODE_OPTIONS` before the app starts and patches Express,
+HTTP, Axios and pino on its own.
+
+Set your credentials up once:
+
+```bash
+cp .env.template .env
+# then edit .env and paste your Dash0 auth token
+```
+
+You need `DASH0_AUTH_TOKEN` and `DASH0_ENDPOINT`. Both come from
+https://app.dash0.com → Settings (Auth Tokens, and Endpoints for the OTLP/gRPC
+address of your region). Then:
+
+```bash
+docker compose up --build
+```
+
+Order a pizza at http://localhost:8080 and the order shows up in Dash0 as a
+single trace across all three services.
+
+### What you get
+
+- **Traces** — one trace per order, spanning order → kitchen → delivery, with
+  the HTTP calls between them linked automatically via `traceparent` headers.
+- **Logs** — the existing pino output, shipped as OTLP and stamped with the
+  `trace_id` and `span_id` of the request that produced it, so you can jump
+  from a log line to its trace and back.
+- **Metrics** — HTTP server/client and Node.js runtime metrics.
+
+Services appear as `order-service`, `kitchen-service` and `delivery-service`
+under the `pizza-app` service namespace.
+
+### Running without Dash0
+
+```bash
+OTEL_SDK_DISABLED=true docker compose up
+```
+
+The app behaves exactly as before and no telemetry is produced.
+
+### Notes
+
+- The Docker health checks poll `/health` every 5s, so expect a steady trickle
+  of `GET /health` spans alongside the order traces.
+- The browser frontend is not instrumented; traces start when the order reaches
+  the Order Service.
+- Telemetry goes straight from each service to Dash0. For production you would
+  normally put an OpenTelemetry Collector in between to handle batching,
+  retries and filtering.
+
 ## Failure Modes You Can Switch On
 
 ### Slow Kitchen (Oven is Broken)
@@ -99,6 +154,7 @@ Delivery has nobody to assign, so orders fail.
 - **Node.js** - Runtime
 - **Express** - Web framework
 - **Axios** - HTTP client
+- **OpenTelemetry** - Traces, metrics and logs (zero-code instrumentation)
 - **Docker** - Containerization
 
 ## Ports

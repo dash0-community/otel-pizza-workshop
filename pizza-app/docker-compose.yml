@@ -8,20 +8,50 @@
 #
 # An `.env` anywhere else (the repo root, for example) is NOT read.
 
+# Telemetry settings shared by all three Node services. Each service adds its
+# own OTEL_SERVICE_NAME on top of this block.
+x-otel-env: &otel-env
+  # Loads the OpenTelemetry SDK and its instrumentations before the app starts,
+  # so no application code has to import or configure anything.
+  NODE_OPTIONS: --require @opentelemetry/auto-instrumentations-node/register
+
+  # Where telemetry goes. DASH0_ENDPOINT is the OTLP/gRPC ingress of your Dash0
+  # organization (Settings -> Endpoints), which is why the protocol is grpc.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${DASH0_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${DASH0_OTLP_PROTOCOL:-grpc}
+  OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${DASH0_AUTH_TOKEN:-},Dash0-Dataset=${DASH0_DATASET:-default}
+  OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+
+  # Send all three signals. Traces and metrics come from the instrumentations;
+  # logs are the existing pino output, bridged to OTLP and stamped with the
+  # trace and span ID of whatever request produced them.
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+
+  # Groups the services together in Dash0 and links their telemetry back here.
+  OTEL_RESOURCE_ATTRIBUTES: service.namespace=pizza-app,deployment.environment.name=${DASH0_ENVIRONMENT:-workshop},vcs.repository.url.full=https://github.com/aetiusgular/otel-pizza-workshop
+
+  # Set to true to run the stack with no telemetry at all.
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+
 services:
   order-service:
     build: ./order-service
     ports:
       - "3000:3000"
     environment:
-      - KITCHEN_SERVICE_URL=http://kitchen-service:3001
-      - DELIVERY_SERVICE_URL=http://delivery-service:3002
+      <<: *otel-env
+      OTEL_SERVICE_NAME: order-service
+      KITCHEN_SERVICE_URL: http://kitchen-service:3001
+      DELIVERY_SERVICE_URL: http://delivery-service:3002
     healthcheck:
+      # NODE_OPTIONS is cleared so the probe does not boot a whole OpenTelemetry
+      # SDK every few seconds just to make one health request.
       test:
-        - CMD
-        - node
-        - -e
-        - "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - CMD-SHELL
+        - >-
+          NODE_OPTIONS= node -e "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 5s
       timeout: 3s
       retries: 12
@@ -37,13 +67,14 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - SLOW_KITCHEN=${SLOW_KITCHEN:-false}
+      <<: *otel-env
+      OTEL_SERVICE_NAME: kitchen-service
+      SLOW_KITCHEN: ${SLOW_KITCHEN:-false}
     healthcheck:
       test:
-        - CMD
-        - node
-        - -e
-        - "require('http').get('http://127.0.0.1:3001/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - CMD-SHELL
+        - >-
+          NODE_OPTIONS= node -e "require('http').get('http://127.0.0.1:3001/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 5s
       timeout: 3s
       retries: 12
@@ -54,13 +85,14 @@ services:
     ports:
       - "3002:3002"
     environment:
-      - NO_DRIVERS=${NO_DRIVERS:-false}
+      <<: *otel-env
+      OTEL_SERVICE_NAME: delivery-service
+      NO_DRIVERS: ${NO_DRIVERS:-false}
     healthcheck:
       test:
-        - CMD
-        - node
-        - -e
-        - "require('http').get('http://127.0.0.1:3002/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - CMD-SHELL
+        - >-
+          NODE_OPTIONS= node -e "require('http').get('http://127.0.0.1:3002/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 5s
       timeout: 3s
       retries: 12
